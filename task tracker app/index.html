@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Team Task Tracker</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/lucide/0.263.1/umd/lucide.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+    const { Plus, Users, Edit2, Trash2, Settings, Wifi, WifiOff, User, Filter } = lucide;
+
+    function Icon({ icon: IconComponent, ...props }) {
+      return <IconComponent {...props} />;
+    }
+
+    function TaskTracker() {
+      const [tasks, setTasks] = useState([]);
+      const [members, setMembers] = useState([]);
+      const [modal, setModal] = useState(null);
+      const [editData, setEditData] = useState(null);
+      const [filter, setFilter] = useState({ status: 'all', division: 'all' });
+      const [loading, setLoading] = useState(true);
+      const [connected, setConnected] = useState(false);
+      const [config, setConfig] = useState({ apiKey: '', databaseURL: '', projectId: '' });
+
+      useEffect(() => {
+        const saved = localStorage.getItem('firebaseConfig');
+        if (saved) {
+          const cfg = JSON.parse(saved);
+          setConfig(cfg);
+          initFirebase(cfg);
+        } else {
+          setLoading(false);
+          setModal('config');
+        }
+      }, []);
+
+      const initFirebase = async (cfg) => {
+        if (!cfg.databaseURL || !cfg.apiKey) {
+          setLoading(false);
+          setModal('config');
+          return;
+        }
+        setConnected(true);
+        loadData(cfg);
+      };
+
+      const loadData = async (cfg) => {
+        try {
+          const [tasksRes, membersRes] = await Promise.all([
+            fetch(`${cfg.databaseURL}/tasks.json`),
+            fetch(`${cfg.databaseURL}/teamMembers.json`)
+          ]);
+          const tasksData = await tasksRes.json();
+          const membersData = await membersRes.json();
+          
+          setTasks(tasksData ? Object.keys(tasksData).map(k => ({ ...tasksData[k], id: k })) : []);
+          setMembers(membersData ? Object.keys(membersData).map(k => ({ ...membersData[k], id: k })) : []);
+        } catch (err) {
+          console.error(err);
+        }
+        setLoading(false);
+      };
+
+      const saveConfig = () => {
+        if (!config.databaseURL || !config.apiKey) return alert('Isi Database URL dan API Key');
+        localStorage.setItem('firebaseConfig', JSON.stringify(config));
+        setModal(null);
+        initFirebase(config);
+      };
+
+      const addTask = async (data) => {
+        if (!data.title?.trim() || !data.assignedTo) {
+          alert('Mohon isi judul task dan pilih anggota');
+          return;
+        }
+        const member = members.find(m => m.id === data.assignedTo);
+        const id = Date.now().toString();
+        const task = { ...data, division: member.division, memberName: member.name, createdAt: new Date().toISOString(), modifiedAt: new Date().toISOString() };
+        
+        try {
+          await fetch(`${config.databaseURL}/tasks/${id}.json`, { method: 'PUT', body: JSON.stringify(task) });
+          setTasks([...tasks, { ...task, id }]);
+          setModal(null);
+        } catch (err) {
+          alert('Gagal menambah task');
+        }
+      };
+
+      const addMember = async (data) => {
+        if (!data.name?.trim() || !data.division?.trim()) {
+          alert('Mohon isi nama dan divisi');
+          return;
+        }
+        
+        if (!connected) {
+          alert('Firebase belum terkoneksi');
+          return;
+        }
+        
+        try {
+          const id = Date.now().toString();
+          await fetch(`${config.databaseURL}/teamMembers/${id}.json`, { 
+            method: 'PUT', 
+            body: JSON.stringify(data) 
+          });
+          setMembers([...members, { ...data, id }]);
+          setModal(null);
+        } catch (error) {
+          console.error('Error adding member:', error);
+          alert('Gagal menambah anggota. Cek koneksi Firebase.');
+        }
+      };
+
+      const updateStatus = async (id, status) => {
+        const task = tasks.find(t => t.id === id);
+        const updated = { ...task, status, modifiedAt: new Date().toISOString() };
+        delete updated.id;
+        
+        await fetch(`${config.databaseURL}/tasks/${id}.json`, { method: 'PUT', body: JSON.stringify(updated) });
+        setTasks(tasks.map(t => t.id === id ? { ...updated, id } : t));
+      };
+
+      const updateTask = async (data) => {
+        const member = members.find(m => m.id === data.assignedTo);
+        const orig = tasks.find(t => t.id === data.id);
+        const updated = { ...data, memberName: member.name, division: member.division, createdAt: orig.createdAt, modifiedAt: new Date().toISOString() };
+        const { id, ...taskData } = updated;
+        
+        await fetch(`${config.databaseURL}/tasks/${id}.json`, { method: 'PUT', body: JSON.stringify(taskData) });
+        setTasks(tasks.map(t => t.id === id ? updated : t));
+        setModal(null);
+        setEditData(null);
+      };
+
+      const deleteTask = async (id) => {
+        if (!confirm('Hapus task ini?')) return;
+        await fetch(`${config.databaseURL}/tasks/${id}.json`, { method: 'DELETE' });
+        setTasks(tasks.filter(t => t.id !== id));
+      };
+
+      const formatWeek = (date) => {
+        if (!date) return '';
+        const d = new Date(date);
+        const week = Math.ceil((d.getDate() + new Date(d.getFullYear(), d.getMonth(), 1).getDay()) / 7);
+        return `Minggu ke-${week} ${d.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })}`;
+      };
+
+      const filtered = tasks.filter(t => 
+        (filter.status === 'all' || t.status === filter.status) &&
+        (filter.division === 'all' || t.division === filter.division)
+      );
+
+      const divisions = [...new Set(members.map(m => m.division))];
+
+      if (loading) return <div className="min-h-screen bg-gray-50 flex items-center justify-center">Loading...</div>;
+
+      return (
+        <div className="min-h-screen bg-gray-50 p-4">
+          <div className="max-w-7xl mx-auto">
+            <div className="flex justify-between items-start mb-6">
+              <div>
+                <h1 className="text-3xl font-bold text-gray-900">Team Task Tracker</h1>
+                <p className="text-gray-600">Real-time collaboration with Firebase</p>
+              </div>
+              <div className="flex gap-2">
+                <div className={`px-3 py-2 rounded-lg text-sm flex items-center gap-2 ${connected ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                  <Icon icon={connected ? Wifi : WifiOff} className="w-4 h-4" />
+                  {connected ? 'Connected' : 'Disconnected'}
+                </div>
+                <button onClick={() => setModal('config')} className="p-2 hover:bg-gray-100 rounded-lg">
+                  <Icon icon={Settings} className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {!connected && (
+              <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg text-yellow-800 text-sm">
+                ⚠️ Setup Firebase credentials terlebih dahulu
+              </div>
+            )}
+
+            <div className="flex gap-2 mb-4">
+              <button onClick={() => setModal('addTask')} disabled={!connected} className={`px-4 py-2 rounded-lg flex items-center gap-2 ${connected ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-300 text-gray-500'}`}>
+                <Icon icon={Plus} className="w-5 h-5" /> Tambah Task
+              </button>
+              <button onClick={() => setModal('addMember')} disabled={!connected} className={`px-4 py-2 rounded-lg flex items-center gap-2 ${connected ? 'bg-gray-700 text-white hover:bg-gray-800' : 'bg-gray-300 text-gray-500'}`}>
+                <Icon icon={Users} className="w-5 h-5" /> Tambah Anggota
+              </button>
+            </div>
+
+            {connected && (
+              <div className="bg-white p-4 rounded-lg shadow-sm mb-4 flex gap-4">
+                <select value={filter.status} onChange={(e) => setFilter({ ...filter, status: e.target.value })} className="px-3 py-2 border rounded-lg">
+                  <option value="all">Semua Status</option>
+                  <option value="open">Open</option>
+                  <option value="on-progress">On Progress</option>
+                  <option value="close">Close</option>
+                </select>
+                <select value={filter.division} onChange={(e) => setFilter({ ...filter, division: e.target.value })} className="px-3 py-2 border rounded-lg">
+                  <option value="all">Semua Divisi</option>
+                  {divisions.map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </div>
+            )}
+
+            {members.length > 0 && (
+              <div className="bg-white p-6 rounded-lg shadow-sm mb-4">
+                <h2 className="text-xl font-bold mb-4">Anggota Tim</h2>
+                <div className="grid md:grid-cols-3 gap-4">
+                  {members.map(m => {
+                    const count = tasks.filter(t => t.assignedTo === m.id).length;
+                    const done = tasks.filter(t => t.assignedTo === m.id && t.status === 'close').length;
+                    return (
+                      <div key={m.id} className="border p-3 rounded-lg flex items-center gap-3">
+                        <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 font-bold">
+                          {m.name[0]}
+                        </div>
+                        <div>
+                          <div className="font-medium">{m.name}</div>
+                          <div className="text-sm text-gray-500">{m.division}</div>
+                          <div className="text-xs text-gray-400">{done}/{count} selesai</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-4">
+              {filtered.length === 0 ? (
+                <div className="bg-white p-12 rounded-lg text-center text-gray-500">
+                  {tasks.length === 0 ? 'Belum ada task' : 'Tidak ada task sesuai filter'}
+                </div>
+              ) : (
+                filtered.map(t => (
+                  <div key={t.id} className="bg-white p-6 rounded-lg shadow-sm">
+                    <div className="flex justify-between mb-3">
+                      <div className="flex-1">
+                        <div className="flex justify-between items-start">
+                          <h3 className="text-lg font-bold">{t.title}</h3>
+                          <div className="flex gap-2">
+                            <button onClick={() => { setEditData(t); setModal('editTask'); }} className="p-1 hover:bg-blue-50 rounded">
+                              <Icon icon={Edit2} className="w-4 h-4" />
+                            </button>
+                            <button onClick={() => deleteTask(t.id)} className="p-1 hover:bg-red-50 rounded">
+                              <Icon icon={Trash2} className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                        {t.description && <p className="text-sm text-gray-600 mb-2">{t.description}</p>}
+                        <div className="flex gap-3 text-sm flex-wrap">
+                          <span>{t.memberName}</span>
+                          <span className="px-2 py-1 bg-gray-100 rounded text-xs">{t.division}</span>
+                          {t.dueDate && <span className={`px-2 py-1 rounded text-xs ${new Date(t.dueDate) < new Date() && t.status !== 'close' ? 'bg-red-100 text-red-700' : 'bg-blue-50 text-blue-700'}`}>{formatWeek(t.dueDate)}</span>}
+                        </div>
+                      </div>
+                      <span className={`px-3 py-1 rounded-full text-sm ml-4 ${t.status === 'open' ? 'bg-gray-100' : t.status === 'on-progress' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
+                        {t.status === 'open' ? 'Open' : t.status === 'on-progress' ? 'On Progress' : 'Close'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center pt-3 border-t">
+                      <div className="flex gap-2">
+                        {['open', 'on-progress', 'close'].map(s => (
+                          <button key={s} onClick={() => updateStatus(t.id, s)} disabled={t.status === s} className={`px-3 py-1 rounded-lg text-sm ${t.status === s ? 'bg-gray-100 text-gray-400' : 'bg-gray-50 hover:bg-gray-100'}`}>
+                            {s === 'open' ? 'Open' : s === 'on-progress' ? 'On Progress' : 'Close'}
+                          </button>
+                        ))}
+                      </div>
+                      <span className="text-xs text-gray-400">{new Date(t.modifiedAt).toLocaleString('id-ID')}</span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {modal === 'config' && (
+              <Modal title="Firebase Configuration" onClose={() => setModal(null)}>
+                <div className="space-y-3">
+                  <Input label="API Key *" value={config.apiKey} onChange={(v) => setConfig({ ...config, apiKey: v })} placeholder="AIzaSy..." />
+                  <Input label="Database URL *" value={config.databaseURL} onChange={(v) => setConfig({ ...config, databaseURL: v })} placeholder="https://your-project.firebaseio.com" />
+                  <Input label="Project ID" value={config.projectId} onChange={(v) => setConfig({ ...config, projectId: v })} placeholder="your-project" />
+                  <div className="bg-blue-50 p-3 rounded text-sm text-blue-800">
+                    Firebase Console → Project Settings → Your apps → Web app → Copy firebaseConfig
+                  </div>
+                  <button onClick={saveConfig} className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Simpan</button>
+                </div>
+              </Modal>
+            )}
+
+            {modal === 'addTask' && (
+              <TaskForm members={members} onSubmit={addTask} onCancel={() => setModal(null)} formatWeek={formatWeek} />
+            )}
+
+            {modal === 'editTask' && editData && (
+              <TaskForm members={members} initialData={editData} onSubmit={updateTask} onCancel={() => { setModal(null); setEditData(null); }} formatWeek={formatWeek} isEdit />
+            )}
+
+            {modal === 'addMember' && (
+              <MemberForm onSubmit={addMember} onCancel={() => setModal(null)} />
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    function Modal({ title, children, onClose }) {
+      return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full">
+            <h2 className="text-xl font-bold mb-4">{title}</h2>
+            {children}
+          </div>
+        </div>
+      );
+    }
+
+    function Input({ label, value, onChange, placeholder, type = 'text' }) {
+      return (
+        <div>
+          {label && <label className="block text-sm font-medium mb-1">{label}</label>}
+          <input type={type} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+        </div>
+      );
+    }
+
+    function TaskForm({ members, initialData, onSubmit, onCancel, formatWeek, isEdit }) {
+      const [data, setData] = useState(initialData || { title: '', description: '', assignedTo: '', status: 'open', dueDate: '' });
+
+      if (members.length === 0) {
+        return (
+          <Modal title={isEdit ? 'Edit Task' : 'Tambah Task'} onClose={onCancel}>
+            <div className="space-y-4">
+              <p className="text-center text-gray-600">Tambahkan anggota terlebih dahulu sebelum membuat task</p>
+              <button 
+                type="button"
+                onClick={onCancel} 
+                className="w-full px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 active:bg-gray-400 transition-colors"
+              >
+                Tutup
+              </button>
+            </div>
+          </Modal>
+        );
+      }
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        if (!data.title?.trim() || !data.assignedTo) {
+          alert('Mohon isi judul task dan pilih anggota');
+          return;
+        }
+        onSubmit(data);
+      };
+
+      return (
+        <Modal title={isEdit ? 'Edit Task' : 'Tambah Task'} onClose={onCancel}>
+          <div className="space-y-3">
+            <Input label="Judul *" value={data.title} onChange={(v) => setData({ ...data, title: v })} placeholder="Judul task" />
+            <div>
+              <label className="block text-sm font-medium mb-1">Deskripsi</label>
+              <textarea value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} placeholder="Deskripsi task (opsional)" className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none" rows="3" />
+            </div>
+            <div>
+              <Input label="Target" type="date" value={data.dueDate} onChange={(v) => setData({ ...data, dueDate: v })} />
+              {data.dueDate && <p className="text-xs text-gray-500 mt-1">{formatWeek(data.dueDate)}</p>}
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Assign ke *</label>
+              <select value={data.assignedTo} onChange={(e) => setData({ ...data, assignedTo: e.target.value })} className="w-full px-4 py-2 border rounded-lg">
+                <option value="">Pilih anggota...</option>
+                {members.map(m => <option key={m.id} value={m.id}>{m.name} - {m.division}</option>)}
+              </select>
+            </div>
+            {isEdit && (
+              <div>
+                <label className="block text-sm font-medium mb-1">Status</label>
+                <select value={data.status} onChange={(e) => setData({ ...data, status: e.target.value })} className="w-full px-4 py-2 border rounded-lg">
+                  <option value="open">Open</option>
+                  <option value="on-progress">On Progress</option>
+                  <option value="close">Close</option>
+                </select>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button 
+                type="button"
+                onClick={handleSubmit} 
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 transition-colors"
+              >
+                {isEdit ? 'Simpan' : 'Tambah'}
+              </button>
+              <button 
+                type="button"
+                onClick={onCancel} 
+                className="flex-1 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 active:bg-gray-400 transition-colors"
+              >
+                Batal
+              </button>
+            </div>
+          </div>
+        </Modal>
+      );
+    }
+
+    function MemberForm({ onSubmit, onCancel }) {
+      const [data, setData] = useState({ name: '', division: '' });
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        if (!data.name?.trim() || !data.division?.trim()) {
+          alert('Mohon isi nama dan divisi');
+          return;
+        }
+        onSubmit(data);
+      };
+
+      return (
+        <Modal title="Tambah Anggota" onClose={onCancel}>
+          <div className="space-y-3">
+            <Input 
+              label="Nama *" 
+              value={data.name} 
+              onChange={(v) => setData({ ...data, name: v })} 
+              placeholder="Contoh: John Doe" 
+            />
+            <Input 
+              label="Divisi *" 
+              value={data.division} 
+              onChange={(v) => setData({ ...data, division: v })} 
+              placeholder="Contoh: Engineering" 
+            />
+            <div className="flex gap-2">
+              <button 
+                type="button"
+                onClick={handleSubmit} 
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 transition-colors"
+              >
+                Tambah
+              </button>
+              <button 
+                type="button"
+                onClick={onCancel} 
+                className="flex-1 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 active:bg-gray-400 transition-colors"
+              >
+                Batal
+              </button>
+            </div>
+          </div>
+        </Modal>
+      );
+    }
+
+    ReactDOM.render(<TaskTracker />, document.getElementById('root'));
+  </script>
+</body>
+</html>
